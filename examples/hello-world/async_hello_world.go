@@ -37,6 +37,16 @@ func main() {
 	}
 	defer conn.Close()
 
+	// It's possible to limit the rate at which transactions are submitted to the server.
+	// This can be done based on a desired latency, in milliseconds.  The client will be
+	// blocked from submitting new transactions if this latency is not maintained.
+	// conn.SetLatencyTarget(3)
+
+	// Or this can be done based on a transaction rate.  This will limit the number
+	// of transaction sent to the server per second.
+	// conn.SetTxnsPerSecond(20000)
+
+
 	conn.Exec("@AdHoc", []driver.Value{"DELETE FROM HELLOWORLD;"})
 	resCons := ResponseConsumer{}
 

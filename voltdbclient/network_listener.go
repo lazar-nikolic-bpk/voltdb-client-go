@@ -95,8 +95,8 @@ func (nl *networkListener) disconnect() {
 	err := errors.New("connection lost")
 	nl.requestMutex.Lock()
 	defer nl.requestMutex.Unlock()
-	for handle, req := range nl.requests {
-		verr := VoltError{voltResponse: *(newVoltResponseInfo(handle, int8(0), "", 0, "", 0, 0)), error: err}
+	for _, req := range nl.requests {
+		verr := VoltError{voltResponse: nil, error: err}
 		req.getChan() <- voltResponse(verr)
 	}
 	nl.requests = nil
@@ -171,7 +171,7 @@ func (nl *networkListener) registerSyncRequest(nc *nodeConn, pi *procedureInvoca
 	return ch
 }
 
-func (nl *networkListener) registerAsyncRequest(nc *nodeConn, pi *procedureInvocation, arc AsyncResponseConsumer) {
+func (nl *networkListener) registerAsyncRequest(nc *nodeConn, pi *procedureInvocation, arc AsyncResponseConsumer, respRcvd func(int32)) {
 	handle := pi.handle
 	ch := make(chan voltResponse, 1)
 	nr := newAsyncRequest(nc, ch, pi.isQuery, arc, pi.getLen())
@@ -182,14 +182,21 @@ func (nl *networkListener) registerAsyncRequest(nc *nodeConn, pi *procedureInvoc
 	go func(ch <-chan voltResponse) {
 		select {
 		case vr := <-ch:
+			if respRcvd != nil {
+				respRcvd(vr.getClusterRoundTripTime())
+			}
 			avr := asyncVoltResponse{vr, arc}
 			nl.asyncsCh <- avr
 		case <-time.After(2 * time.Minute):
+			if respRcvd != nil {
+				// timeout in milliseconds
+				respRcvd(int32(2 * time.Minute.Seconds() * 1000))
+			}
 			req := nl.removeRequest(handle)
 
 			if req != nil {
 				err := errors.New("timeout")
-				verr := VoltError{voltResponse: *(newVoltResponseInfo(handle, int8(0), "", 0, "", 0, 0)), error: err}
+				verr := VoltError{voltResponse: nil, error: err}
 				avr := asyncVoltResponse{verr, arc}
 				nl.asyncsCh <- avr
 			}
@@ -241,7 +248,7 @@ type networkRequest struct {
 	nc    *nodeConn
 	query bool
 	ch    chan voltResponse
-	sync bool
+	sync  bool
 	arc   AsyncResponseConsumer
 	// the size of the serialized request written to the server.
 	numBytes int
@@ -295,6 +302,6 @@ func (nr *networkRequest) getNumBytes() int {
 
 // wrap these two things together so that they can go on the asyncs channel.
 type asyncVoltResponse struct {
-	vr voltResponse
+	vr  voltResponse
 	arc AsyncResponseConsumer
 }

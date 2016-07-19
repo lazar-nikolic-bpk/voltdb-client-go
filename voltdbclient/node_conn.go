@@ -41,25 +41,25 @@ type connectionData struct {
 }
 
 type nodeConn struct {
-	dist        *distributer
-	connInfo    string
-	connData    *connectionData
-	tcpConn     *net.TCPConn
+	dist     *distributer
+	connInfo string
+	connData *connectionData
+	tcpConn  *net.TCPConn
 
-	nl          *networkListener
-	nlCloseCh   chan chan bool
+	nl        *networkListener
+	nlCloseCh chan chan bool
 
-	nw          *networkWriter
-	piCh        chan *procedureInvocation
-	nwwg        *sync.WaitGroup
+	nw   *networkWriter
+	piCh chan *procedureInvocation
+	nwwg *sync.WaitGroup
 
 	// queued bytes will be read/written by the main client thread and also
 	// by the network listener thread.
 	queuedBytes int
 	qbMutex     sync.Mutex
 
-	open        bool
-	openMutex   sync.RWMutex
+	open      bool
+	openMutex sync.RWMutex
 }
 
 func newNodeConn(ci string, dist *distributer) *nodeConn {
@@ -216,7 +216,7 @@ func (nc *nodeConn) networkConnect() (*net.TCPConn, *connectionData, error) {
 	return tcpConn, connData, nil
 }
 
-func (nc *nodeConn) exec(pi *procedureInvocation) (driver.Result, error) {
+func (nc *nodeConn) exec(pi *procedureInvocation, respRcvd func(int32)) (driver.Result, error) {
 	if !nc.open {
 		return nil, errors.New("Connection is closed")
 	}
@@ -228,28 +228,40 @@ func (nc *nodeConn) exec(pi *procedureInvocation) (driver.Result, error) {
 	case resp := <-c:
 		switch resp.(type) {
 		case VoltResult:
+			if respRcvd != nil {
+				respRcvd(resp.getClusterRoundTripTime())
+			}
 			return resp.(VoltResult), nil
 		case VoltError:
+			if respRcvd != nil {
+				respRcvd(-1)
+			}
 			return nil, resp.(VoltError)
 		default:
+			if respRcvd != nil {
+				respRcvd(-1)
+			}
 			return nil, VoltError{error: errors.New("unexpected response type")}
 		}
 	case <-time.After(pi.timeout):
+		if respRcvd != nil {
+			respRcvd(int32(pi.timeout.Seconds() * 1000))
+		}
 		return nil, VoltError{voltResponse: voltResponseInfo{status: int8(CONNECTION_TIMEOUT)}, error: errors.New("timeout")}
 	}
 }
 
-func (nc *nodeConn) execAsync(resCons AsyncResponseConsumer, pi *procedureInvocation) error {
+func (nc *nodeConn) execAsync(resCons AsyncResponseConsumer, pi *procedureInvocation, respRcvd func(int32)) error {
 	if !nc.open {
 		return errors.New("Connection is closed")
 	}
-	nc.nl.registerAsyncRequest(nc, pi, resCons)
+	nc.nl.registerAsyncRequest(nc, pi, resCons, respRcvd)
 	nc.incrementQueuedBytes(pi.getLen())
 	nc.piCh <- pi
 	return nil
 }
 
-func (nc *nodeConn) query(pi *procedureInvocation) (driver.Rows, error) {
+func (nc *nodeConn) query(pi *procedureInvocation, respRcvd func(int32)) (driver.Rows, error) {
 	if !nc.open {
 		return nil, errors.New("Connection is closed")
 	}
@@ -260,13 +272,25 @@ func (nc *nodeConn) query(pi *procedureInvocation) (driver.Rows, error) {
 	case resp := <-c:
 		switch resp.(type) {
 		case VoltRows:
+			if respRcvd != nil {
+				respRcvd(resp.getClusterRoundTripTime())
+			}
 			return resp.(VoltRows), nil
 		case VoltError:
+			if respRcvd != nil {
+				respRcvd(-1)
+			}
 			return nil, resp.(VoltError)
 		default:
+			if respRcvd != nil {
+				respRcvd(-1)
+			}
 			return nil, VoltError{error: errors.New("unexpected response type")}
 		}
 	case <-time.After(pi.timeout):
+		if respRcvd != nil {
+			respRcvd(int32(pi.timeout.Seconds() * 1000))
+		}
 		return nil, VoltError{voltResponse: voltResponseInfo{status: int8(CONNECTION_TIMEOUT)}, error: errors.New("timeout")}
 	}
 }
@@ -275,11 +299,11 @@ func (nc *nodeConn) query(pi *procedureInvocation) (driver.Rows, error) {
 // until the query is sent over the network to the server.  The eventual
 // response will be handled by the given AsyncResponseConsumer, this processing
 // happens in the 'response' thread.
-func (nc *nodeConn) queryAsync(rowsCons AsyncResponseConsumer, pi *procedureInvocation) error {
+func (nc *nodeConn) queryAsync(rowsCons AsyncResponseConsumer, pi *procedureInvocation, respRcvd func(int32)) error {
 	if !nc.open {
 		return errors.New("Connection is closed")
 	}
-	nc.nl.registerAsyncRequest(nc, pi, rowsCons)
+	nc.nl.registerAsyncRequest(nc, pi, rowsCons, respRcvd)
 	nc.incrementQueuedBytes(pi.getLen())
 	nc.piCh <- pi
 	return nil

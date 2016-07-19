@@ -43,6 +43,7 @@ type distributer struct {
 	ncMutex sync.Mutex
 	open    atomic.Value
 	h       hashinater
+	rl      rateLimiter
 
 	subscribedConnection       *nodeConn // The connection we have issued our subscriptions to.
 	subscriptionRequestPending bool
@@ -63,6 +64,7 @@ func newDistributer() *distributer {
 	d.ncIndex = 0
 	d.open = atomic.Value{}
 	d.open.Store(true)
+	d.rl = newTxnLimiter()
 	d.useClientAffinity = true
 	d.fetchedCatalog = true
 	d.ignoreBackpressure = true
@@ -71,6 +73,29 @@ func newDistributer() *distributer {
 	d.hostIdToConnection = make(map[int]*nodeConn)
 	d.procedureInfos = make(map[string]procedure)
 	return d
+}
+
+func (d *distributer) SetTxnsPerSecond(txnPS int) {
+	txnLimiter, ok := d.rl.(*txnLimiter)
+	if ok {
+		txnLimiter.setTxnsPerSecond(txnPS)
+	} else {
+		txnLimiter := newTxnLimiter()
+		txnLimiter.setTxnsPerSecond(txnPS)
+		d.rl = txnLimiter
+	}
+}
+
+func (d *distributer) SetLatencyTarget(latencyTarget int32) {
+	latencyLimiter, ok := d.rl.(*latencyLimiter)
+	if ok {
+		latencyLimiter.setLatencyTarget(latencyTarget)
+	} else {
+		latencyLimiter := newLatencyLimiter()
+		latencyLimiter.setLatencyTarget(latencyTarget)
+		d.rl = latencyLimiter
+	}
+
 }
 
 func (d *distributer) setConns(ncs []*nodeConn) {
@@ -160,7 +185,11 @@ func (d *distributer) ExecTimeout(query string, args []driver.Value, timeout tim
 	if err != nil {
 		return nil, err
 	}
-	return nc.exec(pi)
+	err = d.rl.limit(timeout)
+	if err != nil {
+		return nil, err
+	}
+	return nc.exec(pi, d.rl.responseReceived)
 }
 
 // Exec executes a query that doesn't return rows, such as an INSERT or UPDATE.
@@ -181,7 +210,11 @@ func (d *distributer) ExecAsyncTimeout(resCons AsyncResponseConsumer, query stri
 	if err != nil {
 		return err
 	}
-	return nc.execAsync(resCons, pi)
+	err = d.rl.limit(timeout)
+	if err != nil {
+		return err
+	}
+	return nc.execAsync(resCons, pi, d.rl.responseReceived)
 }
 
 // Prepare creates a prepared statement for later queries or executions.
@@ -205,7 +238,11 @@ func (d *distributer) QueryTimeout(query string, args []driver.Value, timeout ti
 	if err != nil {
 		return nil, err
 	}
-	return nc.query(pi)
+	err = d.rl.limit(timeout)
+	if err != nil {
+		return nil, err
+	}
+	return nc.query(pi, d.rl.responseReceived)
 }
 
 // QueryAsync executes a query asynchronously.  The invoking thread will block
@@ -229,7 +266,11 @@ func (d *distributer) QueryAsyncTimeout(rowsCons AsyncResponseConsumer, query st
 	if nc == nil {
 		return errors.New("no valid connection found")
 	}
-	return nc.queryAsync(rowsCons, pi)
+	err = d.rl.limit(timeout)
+	if err != nil {
+		return err
+	}
+	return nc.queryAsync(rowsCons, pi, d.rl.responseReceived)
 }
 
 // Get a connection from the hashinator.  If not, get one by round robin.  If not return nil.
@@ -252,7 +293,7 @@ func (d *distributer) getConnByRR(timeout time.Duration) (*nodeConn, error) {
 		d.ncIndex++
 		d.ncIndex = d.ncIndex % d.ncLen
 		nc := d.ncs[d.ncIndex]
-		if nc.isOpen() && !nc.hasBP() {
+		if nc.isOpen() {
 			if time.Now().Sub(start) > timeout {
 				return nil, errors.New("timeout")
 			} else {
@@ -506,7 +547,7 @@ func (d *distributer) subscribeTopo() {
 		d.subscribeToNewNode()
 		return
 	}
-	if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@Subscribe", []driver.Value{"TOPOLOGY"}, DEFAULT_QUERY_TIMEOUT)); err != nil {
+	if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@Subscribe", []driver.Value{"TOPOLOGY"}, DEFAULT_QUERY_TIMEOUT), nil); err != nil {
 		d.handleSubscribe(err.(VoltError))
 	} else {
 		d.handleSubscribe(rows.(VoltRows))
@@ -520,7 +561,7 @@ func (d *distributer) getTopoStatistics() {
 		d.subscribeToNewNode()
 		return
 	}
-	if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@Statistics", []driver.Value{"TOPO", int32(JSON_FORMAT)}, DEFAULT_QUERY_TIMEOUT)); err != nil {
+	if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@Statistics", []driver.Value{"TOPO", int32(JSON_FORMAT)}, DEFAULT_QUERY_TIMEOUT), nil); err != nil {
 		log.Panic(err)
 	} else {
 		d.updateAffinityTopology(rows.(VoltRows))
@@ -534,7 +575,7 @@ func (d *distributer) getProcedureInfo() {
 	}
 	//Don't need to retrieve procedure updates every time we do a new subscription
 	if d.fetchedCatalog {
-		if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@SystemCatalog", []driver.Value{"PROCEDURES"}, DEFAULT_QUERY_TIMEOUT)); err != nil {
+		if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@SystemCatalog", []driver.Value{"PROCEDURES"}, DEFAULT_QUERY_TIMEOUT), nil); err != nil {
 			log.Panic(err)
 		} else {
 			d.updateProcedurePartitioning(rows.(VoltRows))

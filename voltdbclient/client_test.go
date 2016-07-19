@@ -44,7 +44,7 @@ func ReadDataTypes(t *testing.T) {
 	check(t, err)
 	r := bytes.NewReader(b)
 
-	nl := newListener(nil, "", r, nil, nil)
+	nl := newNetworkListener(nil, "", r, nil, nil)
 	var handle int64 = 1
 	pi := newProcedureInvocation(handle, true, "HELLOWORLD.select", []driver.Value{}, time.Minute*2)
 	ch := nl.registerRequest(nil, pi)
