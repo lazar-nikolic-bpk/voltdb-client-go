@@ -38,8 +38,9 @@ func main() {
 	defer conn.Close()
 
 	// It's possible to limit the rate at which transactions are submitted to the server.
-	// This can be done based on a desired latency, in milliseconds.  The client will be
-	// blocked from submitting new transactions if this latency is not maintained.
+	// This can be done based on a desired latency, in milliseconds.  The rate at which
+	// transactions are sent to the server may be throttled so that this latency target
+	// can be met.
 	// conn.SetLatencyTarget(3)
 
 	// Or this can be done based on a transaction rate.  This will limit the number
