@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
-	"math"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -51,6 +50,7 @@ type distributer struct {
 	fetchedCatalog     bool
 	ignoreBackpressure bool
 	useClientAffinity  bool
+	partitonMutex      sync.RWMutex
 	partitionMasters   map[int]*nodeConn
 	partitionReplicas  map[int][]*nodeConn
 	hostIdToConnection map[int]*nodeConn
@@ -67,7 +67,7 @@ func newDistributer() *distributer {
 	d.rl = newTxnLimiter()
 	d.useClientAffinity = true
 	d.fetchedCatalog = true
-	d.ignoreBackpressure = true
+	d.ignoreBackpressure = false
 	d.partitionMasters = make(map[int]*nodeConn)
 	d.partitionReplicas = make(map[int][]*nodeConn)
 	d.hostIdToConnection = make(map[int]*nodeConn)
@@ -311,7 +311,6 @@ func (d *distributer) getConnByRR(timeout time.Duration) (*nodeConn, error) {
 // also return backpressure
 // this method is not thread safe
 func (d *distributer) getConnByCA(pi *procedureInvocation) (cxn *nodeConn, backpressure bool, err error) {
-	cxn = nil
 	backpressure = true
 
 	if d.ncLen == 0 {
@@ -335,7 +334,9 @@ func (d *distributer) getConnByCA(pi *procedureInvocation) (cxn *nodeConn, backp
 
 			// If the procedure is read only and single part, load balance across replicas
 			if procedureInfo.SinglePartition && procedureInfo.ReadOnly {
+				d.partitonMutex.RLock()
 				partitionReplica := d.partitionReplicas[hashedPartition]
+				d.partitonMutex.RUnlock()
 				if len(partitionReplica) > 0 {
 					cxn = partitionReplica[rand.Intn(len(partitionReplica))]
 					if cxn.hasBP() {
@@ -353,15 +354,13 @@ func (d *distributer) getConnByCA(pi *procedureInvocation) (cxn *nodeConn, backp
 				}
 			} else {
 				// Writes have to go to the master
+				d.partitonMutex.RLock()
 				cxn = d.partitionMasters[hashedPartition]
+				d.partitonMutex.RUnlock()
 				if (cxn != nil && !cxn.hasBP()) || d.ignoreBackpressure {
 					backpressure = false
 				}
 			}
-		}
-		// if connection closed, reset to nil and let the round robin pick a connection
-		if cxn != nil && !cxn.isOpen() {
-			cxn = nil
 		}
 
 		// TODO Update clientAffinityStats
@@ -370,13 +369,16 @@ func (d *distributer) getConnByCA(pi *procedureInvocation) (cxn *nodeConn, backp
 }
 
 func (d *distributer) getNextHandle() int64 {
-	d.hanMutex.Lock()
-	defer d.hanMutex.Unlock()
-	d.handle++
-	if d.handle == math.MaxInt64 {
-		d.handle = 0
-	}
-	return d.handle
+	/*
+		d.hanMutex.Lock()
+		defer d.hanMutex.Unlock()
+		d.handle++
+		if d.handle == math.MaxInt64 {
+			d.handle = 0
+		}
+		return d.handle
+	*/
+	return atomic.AddInt64(&d.handle, 1)
 }
 
 func (d *distributer) getNextSystemHandle() int64 {
@@ -398,39 +400,69 @@ func (proc *procedure) setDefaults() {
 	}
 }
 
-func (d *distributer) handleSubscribe(rsp voltResponse) {
-	switch rsp.(type) {
-	case VoltError:
-		// log.Printf("Subscribe received error, %#v", rsp)
-		//Fast path subscribing retry if the connection was lost before getting a response
-		if ResponseStatus(rsp.getStatus()) == CONNECTION_LOST {
-			if d.ncLen > 0 {
-				d.subscribeToNewNode()
-			} else {
-				return
-			}
+/**
+ * Handles subscrible update
+ */
+type SubscribeTopoRC struct {
+	d *distributer
+}
+
+func (rc SubscribeTopoRC) ConsumeError(err error) {
+	rc.d.handleSubscribeError(err)
+}
+
+func (rc SubscribeTopoRC) ConsumeResult(res driver.Result) {
+}
+
+func (rc SubscribeTopoRC) ConsumeRows(rows driver.Rows) {
+}
+
+func (d *distributer) handleSubscribeError(err error) {
+	rsp := err.(VoltError)
+	log.Printf("Subscribe received error, %#v", rsp)
+	//Fast path subscribing retry if the connection was lost before getting a response
+	if ResponseStatus(rsp.getStatus()) == CONNECTION_LOST {
+		if d.ncLen > 0 {
+			//TODO rate limit resent
+			d.subscribeToNewNode()
+		} else {
+			return
 		}
-
-		//Slow path, god knows why it didn't succeed, server could be paused and in admin mode. Don't firehose attempts.
-		// if (response.getStatus() != ClientResponse.SUCCESS && !m_ex.isShutdown())
-		//TODO rate limit resent
-		// d.subscribeToNewNode()
-
-		// TODO subscriptionRequestPending should be atomic
-		d.subscriptionRequestPending = false
-	case VoltRows:
-		//TODO go client current don't understand the binary_format hash config
-		// need to fetch again
-		go d.getTopoStatistics()
-
-	default:
-		log.Panic("Unrecongized response type, ", rsp)
 	}
+
+	//Slow path, god knows why it didn't succeed, server could be paused and in admin mode. Don't firehose attempts.
+	// if (response.getStatus() != ClientResponse.SUCCESS && !m_ex.isShutdown())
+
+	// d.subscribeToNewNode()
+
+	// TODO subscriptionRequestPending should be atomic
+	d.subscriptionRequestPending = false
+}
+
+func (d *distributer) handleSubscribeRow(rows VoltRows) {
+	//TODO go client current don't understand the binary_format hash config
+	// need to fetch again
+	d.getTopoStatistics()
 }
 
 /**
- * Handles topology updates for client affinity
+ * Handles procedure updates for client affinity
  */
+type TopoStatisticsRC struct {
+	d *distributer
+}
+
+func (rc TopoStatisticsRC) ConsumeError(err error) {
+	log.Panic(err)
+}
+
+func (rc TopoStatisticsRC) ConsumeResult(res driver.Result) {
+}
+
+func (rc TopoStatisticsRC) ConsumeRows(rows driver.Rows) {
+	rc.d.updateAffinityTopology(rows.(VoltRows))
+}
+
 func (d *distributer) updateAffinityTopology(rows VoltRows) (err error) {
 	if !rows.isValidTable() {
 		return errors.New("Not a validated topo statistic.")
@@ -457,7 +489,7 @@ func (d *distributer) updateAffinityTopology(rows VoltRows) (err error) {
 	default:
 		return errors.New("Not support Legacy hashinator.")
 	}
-
+	d.partitonMutex.Lock()
 	d.partitionMasters = make(map[int]*nodeConn)
 	d.partitionReplicas = make(map[int][]*nodeConn)
 
@@ -497,12 +529,29 @@ func (d *distributer) updateAffinityTopology(rows VoltRows) (err error) {
 			d.partitionMasters[int(partition.(int32))] = d.hostIdToConnection[leaderHostId]
 		}
 	}
+	d.partitonMutex.Unlock()
 	return nil
 }
 
 /**
  * Handles procedure updates for client affinity
  */
+type ProcedureInfoRC struct {
+	d *distributer
+}
+
+func (rc ProcedureInfoRC) ConsumeError(err error) {
+	log.Panic(err)
+}
+
+func (rc ProcedureInfoRC) ConsumeResult(res driver.Result) {
+}
+
+func (rc ProcedureInfoRC) ConsumeRows(rows driver.Rows) {
+	rc.d.updateProcedurePartitioning(rows.(VoltRows))
+	rc.d.fetchedCatalog = false
+}
+
 func (d *distributer) updateProcedurePartitioning(rows VoltRows) error {
 	d.procedureInfos = make(map[string]procedure)
 	for rows.AdvanceRow() {
@@ -528,11 +577,11 @@ func (d *distributer) subscribeToNewNode() {
 
 	//Subscribe to topology updates before retrieving the current topo
 	//so there isn't potential for lost updates
-	go d.subscribeTopo()
+	d.subscribeTopo()
 
-	go d.getTopoStatistics()
+	d.getTopoStatistics()
 
-	go d.getProcedureInfo()
+	d.getProcedureInfo()
 }
 
 func (d *distributer) getConnByRand() (cxn *nodeConn) {
@@ -547,11 +596,8 @@ func (d *distributer) subscribeTopo() {
 		d.subscribeToNewNode()
 		return
 	}
-	if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@Subscribe", []driver.Value{"TOPOLOGY"}, DEFAULT_QUERY_TIMEOUT), nil); err != nil {
-		d.handleSubscribe(err.(VoltError))
-	} else {
-		d.handleSubscribe(rows.(VoltRows))
-	}
+	SubscribeTopoPi := newProcedureInvocation(d.getNextSystemHandle(), true, "@Subscribe", []driver.Value{"TOPOLOGY"}, DEFAULT_QUERY_TIMEOUT)
+	d.subscribedConnection.queryAsync(SubscribeTopoRC{d}, SubscribeTopoPi,nil)
 }
 
 func (d *distributer) getTopoStatistics() {
@@ -561,11 +607,8 @@ func (d *distributer) getTopoStatistics() {
 		d.subscribeToNewNode()
 		return
 	}
-	if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@Statistics", []driver.Value{"TOPO", int32(JSON_FORMAT)}, DEFAULT_QUERY_TIMEOUT), nil); err != nil {
-		log.Panic(err)
-	} else {
-		d.updateAffinityTopology(rows.(VoltRows))
-	}
+	topoStatisticsPi := newProcedureInvocation(d.getNextSystemHandle(), true, "@Statistics", []driver.Value{"TOPO", int32(JSON_FORMAT)}, DEFAULT_QUERY_TIMEOUT)
+	d.subscribedConnection.queryAsync(TopoStatisticsRC{d}, topoStatisticsPi, nil)
 }
 
 func (d *distributer) getProcedureInfo() {
@@ -575,12 +618,8 @@ func (d *distributer) getProcedureInfo() {
 	}
 	//Don't need to retrieve procedure updates every time we do a new subscription
 	if d.fetchedCatalog {
-		if rows, err := d.subscribedConnection.query(newProcedureInvocation(d.getNextSystemHandle(), true, "@SystemCatalog", []driver.Value{"PROCEDURES"}, DEFAULT_QUERY_TIMEOUT), nil); err != nil {
-			log.Panic(err)
-		} else {
-			d.updateProcedurePartitioning(rows.(VoltRows))
-			d.fetchedCatalog = true
-		}
+		procedureInfoPi := newProcedureInvocation(d.getNextSystemHandle(), true, "@SystemCatalog", []driver.Value{"PROCEDURES"}, DEFAULT_QUERY_TIMEOUT)
+		d.subscribedConnection.queryAsync(ProcedureInfoRC{d}, procedureInfoPi, nil)
 	}
 }
 

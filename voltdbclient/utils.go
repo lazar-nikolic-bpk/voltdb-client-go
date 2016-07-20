@@ -43,6 +43,29 @@ func SearchInt64s(a []int64, x int64) int {
 	return sort.Search(len(a), func(i int) bool { return a[i] >= x })
 }
 
+// partitonSlice attaches the methods of sort.Interface to []int64, sorting in increasing order.
+type token2Partition struct {
+	token     int
+	partition int
+}
+
+type Token2PartitionSlice []token2Partition
+
+func (s Token2PartitionSlice) Len() int           { return len(s) }
+func (s Token2PartitionSlice) Less(i, j int) bool { return s[i].token < s[j].token }
+func (s Token2PartitionSlice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+// Sort is a convenience method.
+func (s Token2PartitionSlice) Sort() {
+	sort.Sort(s)
+}
+
+func SearchToken2Partitions(a []token2Partition, token int) (partition int) {
+	t := sort.Search(len(a), func(i int) bool { return a[i].token >= token })
+	partition = a[t-1].partition
+	return
+}
+
 // helper function for clearing content of any type
 func clear(v interface{}) {
 	p := reflect.ValueOf(v).Elem()
