@@ -47,7 +47,6 @@ func main() {
 	// of transaction sent to the server per second.
 	// conn.SetTxnsPerSecond(20000)
 
-
 	conn.Exec("@AdHoc", []driver.Value{"DELETE FROM HELLOWORLD;"})
 	resCons := ResponseConsumer{}
 

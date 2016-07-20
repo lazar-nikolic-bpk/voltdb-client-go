@@ -83,8 +83,9 @@ func OpenConn(cis []string) (*VoltConn, error) {
 		}
 	}
 	vc.setConns(ncs)
-	if vc.distributer.subscribedConnection == nil {
+	if vc.distributer.useClientAffinity {
 		vc.distributer.subscribeToNewNode()
 	}
+
 	return vc, nil
 }
