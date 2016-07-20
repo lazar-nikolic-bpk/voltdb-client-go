@@ -75,13 +75,13 @@ func newDistributer() *distributer {
 	return d
 }
 
-func (d *distributer) SetTxnsPerSecond(txnPS int) {
+func (d *distributer) SetMaxOutstandingTxns(maxTxns int) {
 	txnLimiter, ok := d.rl.(*txnLimiter)
 	if ok {
-		txnLimiter.setTxnsPerSecond(txnPS)
+		txnLimiter.setMaxOutstandingTxns(maxTxns)
 	} else {
 		txnLimiter := newTxnLimiter()
-		txnLimiter.setTxnsPerSecond(txnPS)
+		txnLimiter.setMaxOutstandingTxns(maxTxns)
 		d.rl = txnLimiter
 	}
 }

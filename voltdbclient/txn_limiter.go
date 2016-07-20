@@ -19,79 +19,35 @@ package voltdbclient
 
 import (
 	"errors"
-	"math"
-	"sync"
 	"time"
 )
 
-const (
-	BLOCK_DURATION = time.Millisecond * 100
-)
+type empty struct{}
+type semaphore chan empty
 
 type txnLimiter struct {
-	blockStart time.Time
-	txnCount   int
-	// the number of transactions per block
-	targetTxnCount int
-	mutex          sync.RWMutex
+	txnSems semaphore
 }
 
 func newTxnLimiter() *txnLimiter {
 	var tl = new(txnLimiter)
-	tl.blockStart = time.Now()
-	tl.txnCount = 0
-	tl.targetTxnCount = math.MaxInt32
+	tl.txnSems = make(semaphore, 100)
 	return tl
 }
 
-func (tl *txnLimiter) setTxnsPerSecond(txnPS int) {
-	tl.targetTxnCount = int(math.Ceil(float64(txnPS) / float64(10)))
+func (tl *txnLimiter) setMaxOutstandingTxns(maxTxns int) {
 }
 
 // interface for rateLimiter
 func (tl *txnLimiter) limit(timeout time.Duration) error {
-	start := time.Now()
-	for !tl.permit() {
-		time.Sleep(time.Millisecond)
-		if time.Since(start).Nanoseconds() > timeout.Nanoseconds() {
-			return errors.New("timeout")
-		}
-	}
-	return nil
-}
+	select {
+	case tl.txnSems <- empty{}:
+		return nil
+	case <-time.After(timeout):
+		return errors.New("timeout waiting for transaction permit.")
+	}}
 
 // interface for rateLimiter
 func (tl *txnLimiter) responseReceived(latency int32) {
-	tl.mutex.Lock()
-	tl.txnCount -= 1
-	tl.mutex.Unlock()
-}
-
-func (tl *txnLimiter) nextBlock() bool {
-	var nextBlock bool = false
-	for time.Since(tl.blockStart).Nanoseconds() > BLOCK_DURATION.Nanoseconds() {
-		tl.blockStart = tl.blockStart.Add(BLOCK_DURATION)
-		tl.txnCount = 0
-		nextBlock = true
-	}
-	return nextBlock
-}
-
-// returns true if the transaction can proceed.  increments the transaction count.
-func (tl *txnLimiter) permit() bool {
-	tl.mutex.Lock()
-	defer tl.mutex.Unlock()
-	for tl.nextBlock() {
-	}
-	now := time.Now()
-	elapsed := now.Sub(tl.blockStart)
-	percentElapsed := float64(elapsed.Nanoseconds()) / float64(BLOCK_DURATION.Nanoseconds())
-	if tl.txnCount > 0 {
-		txnsAllowed := int(math.Ceil(float64(tl.targetTxnCount) * percentElapsed))
-		if tl.txnCount > txnsAllowed {
-			return false
-		}
-	}
-	tl.txnCount++
-	return true
+	_ = <-tl.txnSems
 }

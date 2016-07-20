@@ -24,8 +24,9 @@ import (
 	"time"
 )
 
-type empty struct{}
-type semaphore chan empty
+const (
+	BLOCK_DURATION = time.Millisecond * 100
+)
 
 type rateLimiter interface {
 	limit(timeout time.Duration) error
