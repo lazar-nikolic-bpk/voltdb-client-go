@@ -75,27 +75,16 @@ func newDistributer() *distributer {
 	return d
 }
 
-func (d *distributer) SetMaxOutstandingTxns(maxTxns int) {
-	txnLimiter, ok := d.rl.(*txnLimiter)
-	if ok {
-		txnLimiter.setMaxOutstandingTxns(maxTxns)
-	} else {
-		txnLimiter := newTxnLimiter()
-		txnLimiter.setMaxOutstandingTxns(maxTxns)
-		d.rl = txnLimiter
-	}
+func newDistributerWithLatencyTarget(latencyTarget int32) *distributer {
+	d := newDistributer()
+	d.rl = newLatencyLimiter(latencyTarget)
+	return d
 }
 
-func (d *distributer) SetLatencyTarget(latencyTarget int32) {
-	latencyLimiter, ok := d.rl.(*latencyLimiter)
-	if ok {
-		latencyLimiter.setLatencyTarget(latencyTarget)
-	} else {
-		latencyLimiter := newLatencyLimiter()
-		latencyLimiter.setLatencyTarget(latencyTarget)
-		d.rl = latencyLimiter
-	}
-
+func newDistributerWithMaxOutstandingTxns(maxOutTxns int) *distributer {
+	d := newDistributer()
+	d.rl = newTxnLimiterWithMaxOutTxns(maxOutTxns)
+	return d
 }
 
 func (d *distributer) setConns(ncs []*nodeConn) {
@@ -597,7 +586,7 @@ func (d *distributer) subscribeTopo() {
 		return
 	}
 	SubscribeTopoPi := newProcedureInvocation(d.getNextSystemHandle(), true, "@Subscribe", []driver.Value{"TOPOLOGY"}, DEFAULT_QUERY_TIMEOUT)
-	d.subscribedConnection.queryAsync(SubscribeTopoRC{d}, SubscribeTopoPi,nil)
+	d.subscribedConnection.queryAsync(SubscribeTopoRC{d}, SubscribeTopoPi, nil)
 }
 
 func (d *distributer) getTopoStatistics() {

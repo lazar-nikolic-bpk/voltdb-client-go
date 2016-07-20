@@ -31,11 +31,14 @@ type txnLimiter struct {
 
 func newTxnLimiter() *txnLimiter {
 	var tl = new(txnLimiter)
-	tl.txnSems = make(semaphore, 100)
+	tl.txnSems = make(semaphore, 10)
 	return tl
 }
 
-func (tl *txnLimiter) setMaxOutstandingTxns(maxTxns int) {
+func newTxnLimiterWithMaxOutTxns(maxOutTxns int) *txnLimiter {
+	var tl = new(txnLimiter)
+	tl.txnSems = make(semaphore, maxOutTxns)
+	return tl
 }
 
 // interface for rateLimiter
@@ -45,7 +48,8 @@ func (tl *txnLimiter) limit(timeout time.Duration) error {
 		return nil
 	case <-time.After(timeout):
 		return errors.New("timeout waiting for transaction permit.")
-	}}
+	}
+}
 
 // interface for rateLimiter
 func (tl *txnLimiter) responseReceived(latency int32) {

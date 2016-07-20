@@ -26,6 +26,7 @@ import (
 
 const (
 	BLOCK_DURATION = time.Millisecond * 100
+	OUT_TXNS_LIMIT = 20 // as many outstanding transactions as we ever want.
 )
 
 type rateLimiter interface {
@@ -49,23 +50,13 @@ type latencyLimiter struct {
 	latencyTarget int32
 }
 
-func newLatencyLimiter() *latencyLimiter {
+func newLatencyLimiter(latencyTarget int32) *latencyLimiter {
 	var ll = new(latencyLimiter)
 	ll.blockStart = time.Now()
-	ll.maxOutTxns = math.MaxInt32
+	ll.maxOutTxns = OUT_TXNS_LIMIT
 	ll.outTxns = 0
-	ll.latencyTarget = 5
-	return ll
-}
-
-func (ll *latencyLimiter) setLatencyTarget(latencyTarget int32) error {
-	if latencyTarget <= 0 {
-		return errors.New("Latency target should be greater than 0")
-	}
-	ll.mutex.Lock()
 	ll.latencyTarget = latencyTarget
-	ll.mutex.Unlock()
-	return nil
+	return ll
 }
 
 func (ll *latencyLimiter) limit(timeout time.Duration) error {
@@ -122,10 +113,10 @@ func (ll *latencyLimiter) calcLatency() {
 			ll.maxOutTxns = 1
 		}
 	} else {
-		if ll.maxOutTxns < math.MaxInt32 {
+		if ll.maxOutTxns < OUT_TXNS_LIMIT {
 			ll.maxOutTxns = int(math.Ceil(float64(ll.maxOutTxns) * 1.1))
-			if ll.maxOutTxns > math.MaxInt32 {
-				ll.maxOutTxns = math.MaxInt32
+			if ll.maxOutTxns > OUT_TXNS_LIMIT {
+				ll.maxOutTxns = OUT_TXNS_LIMIT
 			}
 		}
 	}
