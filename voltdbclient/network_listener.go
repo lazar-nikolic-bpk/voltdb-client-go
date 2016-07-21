@@ -84,7 +84,7 @@ func (nl *networkListener) readClose(closeCh chan chan bool) chan bool {
 	select {
 	case respCh := <-closeCh:
 		return respCh
-	case <-time.After(5 * time.Millisecond):
+	case <-time.After(1 * time.Nanosecond):
 		return nil
 	}
 }
