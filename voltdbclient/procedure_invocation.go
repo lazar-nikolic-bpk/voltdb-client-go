@@ -63,6 +63,10 @@ func (pi *procedureInvocation) calcLen() int {
 
 func (pi *procedureInvocation) calcParamLen(param interface{}) int {
 	// add one to each because the type itself takes one byte
+	// nil is 1
+	if param == nil {
+		return 1
+	}
 	v := reflect.ValueOf(param)
 	switch v.Kind() {
 	case reflect.Bool:
