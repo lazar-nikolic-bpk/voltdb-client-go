@@ -80,7 +80,7 @@ func (pi *procedureInvocation) calcParamLen(param interface{}) int {
 	case reflect.String:
 		return 5 + v.Len()
 	case reflect.Slice:
-		return 1 + v.Len()
+		return 5 + v.Len()
 	case reflect.Struct:
 		panic("Can't marshal a struct")
 	case reflect.Ptr:
