@@ -72,6 +72,7 @@ func (ll *latencyLimiter) limit(timeout time.Duration) error {
 
 func (ll *latencyLimiter) responseReceived(latency int32) {
 	ll.mutex.Lock()
+<<<<<<< HEAD
 	defer ll.mutex.Unlock()
 	for ll.nextBlock() {
 		ll.calcLatency()
@@ -84,6 +85,15 @@ func (ll *latencyLimiter) responseReceived(latency int32) {
 		ll.latencyTxns++
 		ll.outTxns--
 	}
+=======
+	for ll.nextBlock() {
+		ll.calcLatency()
+	}
+	ll.latency += latency
+	ll.latencyTxns++
+	ll.outTxns--
+	ll.mutex.Unlock()
+>>>>>>> origin/master
 }
 
 func (ll *latencyLimiter) getPermit() bool {

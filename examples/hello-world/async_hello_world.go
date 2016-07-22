@@ -37,15 +37,12 @@ func main() {
 	}
 	defer conn.Close()
 
-	// It's possible to limit the rate at which transactions are submitted to the server.
-	// This can be done based on a desired latency, in milliseconds.  The rate at which
-	// transactions are sent to the server may be throttled so that this latency target
-	// can be met.
-	// conn.SetLatencyTarget(3)
+	// can also specify a latency target (milliseconds) when opening a connection.  The number of
+	// outstanding transactions is throttled until the latency target is met.
+	// conn, err := voltdbclient.OpenConnWithLatencyTarget([]string{"localhost:21212"}, 5)
 
-	// Or this can be done based on a transaction rate.  This will limit the number
-	// of transaction sent to the server per second.
-	// conn.SetTxnsPerSecond(20000)
+	// or can specify the max number of allowable outstanding transactions.
+	// conn, err := voltdbclient.OpenConnWithMaxOutstandingTxns([]string{"localhost:21212"}, 20)
 
 	conn.Exec("@AdHoc", []driver.Value{"DELETE FROM HELLOWORLD;"})
 	resCons := ResponseConsumer{}
