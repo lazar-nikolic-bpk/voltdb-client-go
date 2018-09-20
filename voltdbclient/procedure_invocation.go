@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+	"voltdb-client-go/voltdbclient/table"
 )
 
 type procedureInvocation struct {
@@ -130,6 +131,12 @@ func (pi *procedureInvocation) calcParamLen(param interface{}) int {
 	case reflect.Struct:
 		if _, ok := v.Interface().(time.Time); ok {
 			return 9
+		}
+		if t, ok := v.Interface().(table.VoltTable); ok {
+			// TODO: Implement
+			// return 4 + 4 + 1 + 2 + 1 + 4 + 2 + 4 + 4 + 4 + 3
+			// param type + table length + table length value
+			return 1 + 4 + t.Len()
 		}
 		panic("Can't determine length of struct")
 

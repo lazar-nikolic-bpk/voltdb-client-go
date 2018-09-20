@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VoltDB/voltdb-client-go/wire"
+	"voltdb-client-go/wire"
 )
 
 func init() {
@@ -157,7 +157,6 @@ func (nc *nodeConn) reconnect(protocolVersion int) {
 				}
 				tcpConn, connData, err := nc.networkConnect(protocolVersion)
 				if err != nil {
-					log.Println(fmt.Printf("Failed to reconnect to server %s with %s, retrying ...%d\n", nc.connInfo, err, count))
 					count++
 					continue
 				}

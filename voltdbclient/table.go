@@ -19,31 +19,39 @@ package voltdbclient
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
-
-	"github.com/VoltDB/voltdb-client-go/wire"
+	"voltdb-client-go/wire"
 )
 
 const invalidRowIndex = -1
 
+var endian = binary.BigEndian
+
 // Table represents a single result set for a stored procedure invocation.
 type voltTable struct {
-	columnCount int16
-	columnTypes []int8
-	columnNames []string
+	ColumnCount int16
+	ColumnTypes []int8
+	ColumnNames []string
 	numRows     int32
 	rows        [][]byte
 	rowIndex    int32
 	cnToCi      map[string]int16
 	// offsets for the current rows.
 	columnOffsets []int32
+	totalLength   int
+	meta          []byte
 }
 
-func newVoltTable(columnCount int16, columnTypes []int8, columnNames []string, rowCount int32, rows [][]byte) *voltTable {
+func CreatevoltTable() *voltTable {
+	return &voltTable{}
+}
+
+func newVoltTable(ColumnCount int16, ColumnTypes []int8, ColumnNames []string, rowCount int32, rows [][]byte) *voltTable {
 	var vt = &voltTable{
-		columnCount: columnCount,
-		columnTypes: columnTypes,
-		columnNames: columnNames,
+		ColumnCount: ColumnCount,
+		ColumnTypes: ColumnTypes,
+		ColumnNames: ColumnNames,
 		numRows:     rowCount,
 		rows:        rows,
 		rowIndex:    invalidRowIndex,
@@ -51,7 +59,7 @@ func newVoltTable(columnCount int16, columnTypes []int8, columnNames []string, r
 	}
 
 	// store columnName to columnIndex
-	for ci, cn := range columnNames {
+	for ci, cn := range ColumnNames {
 		vt.cnToCi[cn] = int16(ci)
 	}
 	return vt
@@ -76,13 +84,13 @@ func (vt *voltTable) advanceToRow(rowIndex int32) bool {
 // the represent it as the correct type.
 func (vt *voltTable) calcOffsets() error {
 	// column count + 1, want starting and ending index for every column
-	offsets := make([]int32, vt.columnCount+1)
+	offsets := make([]int32, vt.ColumnCount+1)
 	r := bytes.NewReader(vt.rows[vt.rowIndex])
 	var colIndex int16
 	var offset int32
 	offsets[0] = 0
-	for ; colIndex < vt.columnCount; colIndex++ {
-		len, err := vt.colLength(r, offset, vt.columnTypes[colIndex])
+	for ; colIndex < vt.ColumnCount; colIndex++ {
+		len, err := vt.colLength(r, offset, vt.ColumnTypes[colIndex])
 		if err != nil {
 			return err
 		}
@@ -153,11 +161,11 @@ func (vt *voltTable) getBytes(rowIndex int32, columnIndex int16) ([]byte, error)
 }
 
 func (vt *voltTable) getColumnCount() int {
-	return int(vt.columnCount)
+	return int(vt.ColumnCount)
 }
 
 func (vt *voltTable) getColumnTypes() []int8 {
-	return vt.columnTypes
+	return vt.ColumnTypes
 }
 
 func (vt *voltTable) getRowCount() int {

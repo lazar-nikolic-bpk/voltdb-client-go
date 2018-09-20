@@ -130,7 +130,6 @@ func (c *Conn) updateProcedurePartitioning(rows VoltRows) (*map[string]procedure
 		panicIfnotNil("Error get procedureName column", procedureNameErr)
 		proc := procedure{}
 		procErr := json.Unmarshal(remarks.([]byte), &proc)
-		// log.Println("remarks", string(remarks.([]byte)), "proc after unmarshal", proc)
 		panicIfnotNil("Error parse remarks ", procErr)
 		proc.setDefaults()
 		procedureInfos[procedureName.(string)] = proc

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VoltDB/voltdb-client-go/wire"
+	"voltdb-client-go/wire"
 )
 
 func BenchmarkSerializeArgs(b *testing.B) {

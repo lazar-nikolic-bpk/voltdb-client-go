@@ -70,7 +70,7 @@ func (vr VoltRows) Close() error {
 func (vr VoltRows) Columns() []string {
 	var rv []string
 	if vr.isValidTable() {
-		rv = append(rv, vr.table().columnNames...)
+		rv = append(rv, vr.table().ColumnNames...)
 	}
 	return rv
 }
@@ -196,14 +196,14 @@ func (vr VoltRows) ColumnCount() int {
 	if !vr.isValidTable() {
 		return 0
 	}
-	return int(vr.table().columnCount)
+	return int(vr.table().ColumnCount)
 }
 
 // ColumnTypes returns the column types of the columns in the current table.
 func (vr VoltRows) ColumnTypes() []int8 {
 	var rv []int8
 	if vr.isValidTable() {
-		rv = append(rv, vr.table().columnTypes...)
+		rv = append(rv, vr.table().ColumnTypes...)
 	}
 	return rv
 }

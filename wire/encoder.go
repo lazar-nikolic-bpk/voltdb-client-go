@@ -11,6 +11,8 @@ import (
 	"math"
 	"reflect"
 	"time"
+	"voltdb-client-go/voltdbclient/common"
+	"voltdb-client-go/voltdbclient/table"
 )
 
 //size of bytes
@@ -67,6 +69,38 @@ func (e *Encoder) Reset() {
 // Len retuns the size of the cueent encoded values
 func (e *Encoder) Len() int {
 	return e.buf.Len()
+}
+
+// Marshal encodes query arguments, these are values passed as driver.Value when
+// executing queries
+func (e *Encoder) Encode(v interface{}) (int, error) {
+	switch x := v.(type) {
+	case bool:
+		return e.Bool(x)
+	case int8:
+		return e.Byte(x)
+	case int16:
+		return e.Int16(x)
+	case int32:
+		return e.Int32(x)
+	case int64:
+		return e.Int64(x)
+	case float64:
+		return e.Float64(x)
+	case string:
+		return e.String(x)
+	case time.Time:
+		return e.Time(x)
+	default:
+		rv := reflect.ValueOf(v)
+		switch rv.Kind() {
+		case reflect.Slice:
+			return e.Slice(rv)
+		case reflect.Ptr:
+			return e.Marshal(rv.Elem().Interface())
+		}
+		return 0, errUnknownParam
+	}
 }
 
 // Byte encodes int8 value to voltdb wire protocol Byte. This returns the number
@@ -142,6 +176,17 @@ func (e *Encoder) Binary(v []byte) (int, error) {
 	return s + n, nil
 }
 
+// Binary encodes []byte to voltdb wire protocol varbinary
+//
+// This first encodes the size of v as voltdb Integer followed by raw bytes of v.
+func (e *Encoder) BinaryNoLen(v []byte) (int, error) {
+	n, err := e.buf.Write(v)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // Bool encodes bool values to voltdb wireprotocol boolean
 func (e *Encoder) Bool(v bool) (int, error) {
 	if v {
@@ -178,6 +223,37 @@ func (e *Encoder) Read(b []byte) (int, error) {
 	return e.buf.Read(b)
 }
 
+// Slice encodes slice of arguments without type
+func (e *Encoder) Slice(v reflect.Value) (int, error) {
+	switch v.Type().Elem().Kind() {
+	case reflect.Uint8:
+		n, err := e.Int32(int32(v.Len()))
+		if err != nil {
+			return 0, err
+		}
+		i, err := e.BinaryNoLen(v.Bytes())
+		if err != nil {
+			return 0, err
+		}
+		return n + i, nil
+	default:
+		l := v.Len()
+		n, err := e.Int16(int16(l))
+		if err != nil {
+			return 0, err
+		}
+		size := n
+		for i := 0; i < l; i++ {
+			c, err := e.Marshal(v.Index(i).Interface())
+			if err != nil {
+				return 0, err
+			}
+			size += c
+		}
+		return size, nil
+	}
+}
+
 // Marshal encodes query arguments, these are values passed as driver.Value when
 // executing queries
 func (e *Encoder) Marshal(v interface{}) (int, error) {
@@ -198,11 +274,13 @@ func (e *Encoder) Marshal(v interface{}) (int, error) {
 		return e.MarshalString(x)
 	case time.Time:
 		return e.MarshalTime(x)
+	case table.VoltTable:
+		return e.MarshalTable(x)
 	default:
 		rv := reflect.ValueOf(v)
 		switch rv.Kind() {
 		case reflect.Slice:
-			return e.MarshalSlice(rv)
+			return e.Slice(rv)
 		case reflect.Ptr:
 			return e.Marshal(rv.Elem().Interface())
 		}
@@ -346,6 +424,87 @@ func (e *Encoder) MarshalTime(v time.Time) (int, error) {
 	return n + i, nil
 }
 
+func (e *Encoder) MarshalTable(vt table.VoltTable) (int, error) {
+	total := 0
+	n, err := e.Byte(Table)
+	if err != nil {
+		return 0, err
+	}
+	total += n
+	// total length
+	n, err = e.Int32(int32(vt.Len()))
+	if err != nil {
+		return -1, err
+	}
+	total += n
+	// metadata length
+	n, err = e.Int32(int32(vt.MetaLen()))
+	if err != nil {
+		return -1, err
+	}
+	total += n
+	// status
+	n, err = e.Byte(0)
+	if err != nil {
+		return -1, err
+	}
+	total += n
+	// column count
+	n, err = e.Int16(int16(len(vt.Columns)))
+	if err != nil {
+		return -1, err
+	}
+	total += n
+	for _, col := range vt.Columns {
+		// column types
+		n, err = e.Byte(col.Type)
+		if err != nil {
+			return -1, err
+		}
+		total += n
+	}
+	for _, col := range vt.Columns {
+		// column names
+		n, err = e.String(col.Name)
+		if err != nil {
+			return -1, err
+		}
+		total += n
+	}
+	// row count
+	n, err = e.Int32(int32(vt.RowNum()))
+	if err != nil {
+		return -1, err
+	}
+	total += n
+
+	rowLens := make([]int, len(vt.Rows))
+	// TODO: Make it more efficient
+	// rows
+	for i, row := range vt.Rows {
+		rowLens[i] = 0
+		for _, data := range row {
+			rowLens[i] += common.TypeLen(data)
+		}
+	}
+	for i, row := range vt.Rows {
+		n, err = e.Int32(int32(rowLens[i]))
+		if err != nil {
+			return -1, err
+		}
+		total += n
+		for _, data := range row {
+			n, err = e.Encode(data)
+			if err != nil {
+				return -1, err
+			}
+			total += n
+		}
+
+	}
+	return n + 1, nil
+}
+
 // Args a helper to encode driver arguments
 func (e *Encoder) Args(v []driver.Value) error {
 	_, err := e.Int16(int16(len(v)))
@@ -353,7 +512,7 @@ func (e *Encoder) Args(v []driver.Value) error {
 		return err
 	}
 	for i := 0; i < len(v); i++ {
-		_, err = e.Marshal(v[i])
+		_, err = e.String(v[i].(string))
 		if err != nil {
 			return err
 		}

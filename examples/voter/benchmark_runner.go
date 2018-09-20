@@ -33,7 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VoltDB/voltdb-client-go/voltdbclient"
+	"voltdb-client-go/voltdbclient"
 )
 
 // horizontalRule is handy to use, rather than typing this out several times
@@ -279,7 +279,6 @@ func handleSQLRows(rows *sql.Rows, err error) (success int) {
 }
 
 func handleVoteError(err error) (success int) {
-	log.Println(err)
 	atomic.AddUint64(&(fullStats.failedVotes), 1)
 	return 0
 }
